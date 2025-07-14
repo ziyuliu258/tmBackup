@@ -6,6 +6,7 @@ from layers.SelfAttention_Family import FullAttention
 from layers.Embed import DataEmbedding_wo_pos
 from layers.StandardNorm import Normalize
 from layers.SWTAttention_Family import WaveletEmbedding   
+from torch.linalg import svd  # PyTorch 1.8+ 支持
 
 class DFT_series_decomp(nn.Module):
     """
@@ -26,9 +27,6 @@ class DFT_series_decomp(nn.Module):
         x_trend = x - x_season
         return x_season, x_trend
 
-import torch
-import torch.nn as nn
-from torch.linalg import svd  # PyTorch 1.8+ 支持
 
 class SVD_series_decomp(nn.Module): # Actually a kind of PCA?
     """
@@ -463,7 +461,9 @@ class PastDecomposableMixing(nn.Module):
 
         # season frequency processing
         self.season_frequency_processing = SeasonFrequencyProcessor()
-
+        """
+        The SVD method has been deprecated !!!
+        """
         # SVD c-wise
         self.SVD_c = SVD_series_decomp(top_k=configs.top_k, unfold_method='feature')
 
@@ -587,7 +587,7 @@ class Model(nn.Module):
 
         self.preprocess = series_decomp(configs.moving_avg)
         self.enc_in = configs.enc_in
-        self.use_future_temporal_feature = configs.use_future_temporal_feature
+        self.use_future_temporal_feature = configs.use_future_temporal_feature # mask
 
         if self.channel_independence == 1:
             self.enc_embedding = DataEmbedding_wo_pos(1, configs.d_model, configs.embed, configs.freq,
