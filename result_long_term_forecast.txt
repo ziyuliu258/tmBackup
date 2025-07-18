@@ -1,0 +1,9 @@
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl96_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.38308680057525635, mae:0.40445423126220703
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl96_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.38308680057525635, mae:0.40445423126220703
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl96_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.38308680057525635, mae:0.40445423126220703
+

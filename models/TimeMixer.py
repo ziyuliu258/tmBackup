@@ -174,7 +174,7 @@ class MultiScaleTrendMixing(nn.Module):
             ])
 
     def forward(self, trend_list):
-
+        
         # mixing low->high
         trend_list_reverse = trend_list.copy()
         trend_list_reverse.reverse()
@@ -282,50 +282,177 @@ class KDimSelfAttention(nn.Module):
         output = torch.einsum('bcts,bcsj->bctj', attn_weights, v)
         return output
     
+# #t-wise Attention
+# class BlockSelfAttention(nn.Module):
+#     def __init__(self, k_dim):
+#         super(BlockSelfAttention, self).__init__()
+#         self.query = nn.Linear(k_dim, k_dim)
+#         self.key = nn.Linear(k_dim, k_dim)
+#         self.value = nn.Linear(k_dim, k_dim)
+#         self.softmax = nn.Softmax(dim=-1)
 
-#t-wise Attention
-class BlockSelfAttention(nn.Module):
-    def __init__(self, k_dim):
-        super(BlockSelfAttention, self).__init__()
-        self.query = nn.Linear(k_dim, k_dim)
-        self.key = nn.Linear(k_dim, k_dim)
-        self.value = nn.Linear(k_dim, k_dim)
-        self.softmax = nn.Softmax(dim=-1)
+#     def forward(self, x):
+#         # 生成查询、键和值
+#         q = self.query(x) a
+#         k = self.key(x)
+#         v = self.value(x)
 
-    def forward(self, x):
-        # 生成查询、键和值
-        q = self.query(x)
-        k = self.key(x)
-        v = self.value(x)
+#         # 计算注意力分数
+#         _, _, _, k_dim = x.size()
+#         attn_scores = torch.einsum('bcti,bcsj->bcts', q, k) / (k_dim ** 0.5)
 
-        # 计算注意力分数
-        _, _, _, k_dim = x.size()
-        attn_scores = torch.einsum('bcti,bcsj->bcts', q, k) / (k_dim ** 0.5)
+#         # 应用 Softmax 函数得到注意力权重
+#         attn_weights = self.softmax(attn_scores)
 
-        # 应用 Softmax 函数得到注意力权重
-        attn_weights = self.softmax(attn_scores)
+#         # 计算加权和得到输出
+#         output = torch.einsum('bcts,bcsj->bctj', attn_weights, v)
+#         return output
 
-        # 计算加权和得到输出
-        output = torch.einsum('bcts,bcsj->bctj', attn_weights, v)
-        return output
+# class TDimSelfAttention(nn.Module):
+#     def __init__(self):
+#         super(TDimSelfAttention, self).__init__()
+
+#     def forward(self, x):
+#         b, c, t, k = x.size()
+
+#         x = x.reshape(b, c, t // 12, k * 12)
+#         x = x.permute(0, 1, 3, 2)
+
+#         block_attn = BlockSelfAttention(t//12).to(x.device)
+#         output = block_attn(x)
+
+#         # 恢复原始维度
+#         output = output.permute(0, 1, 3, 2)
+#         output = output.reshape(b, c, t, k)
+#         return output
+
+
 
 class TDimSelfAttention(nn.Module):
-    def __init__(self):
-        super(TDimSelfAttention, self).__init__()
+    """
+    d_model: target number of MLP output layer's dim, from subpatch_len to d_model 
+    """
+    def __init__(self, configs, subpatch_size, num_heads=4):
+        super().__init__()
+        self.d_model = configs.d_model
+        self.subpatch_size = subpatch_size
+        self.num_heads = num_heads
+        self.proj_in = nn.Linear(subpatch_size, configs.d_model)
+        self.attn = nn.MultiheadAttention(embed_dim=configs.d_model, num_heads=num_heads, batch_first=True)
+        self.proj_out = nn.Linear(configs.d_model, subpatch_size)
 
-    def forward(self, x):
-        b, c, t, k = x.size()
+    def forward(self, x, patch_size):
+        """
+        x: [B, C, T, K]
+        patch_size: int
+        subpatch_size: int
+        """
+        B, C, T, K = x.shape
+        outs = []
 
-        x = x.reshape(b, c, t // 12, k * 12)
-        x = x.permute(0, 1, 3, 2)
 
-        block_attn = BlockSelfAttention(t//12).to(x.device)
-        output = block_attn(x)
+        for k in range(K):
+            # 按patch切分，每个patch长度为patch_size，最后一段可能不足
+            patches = []
+            patch_lens = []
+            for start in range(0, T, patch_size):
+                end = min(start + patch_size, T)
+                patches.append(x[:, :, start:end, k])  # [B, C, patch_len]
+                patch_lens.append(end - start)
+            patch_num = len(patches)
+            
+            # 对每个patch再切subpatch
+            phase_groups = []
+            max_group_len = 0
+            group_contents = []  # group_contents[i]: 该phase号所有patch片段（list）
+            max_patch_len = max(patch_lens)
+            for ph in range(0, max_patch_len, self.subpatch_size):
+                group = []  # 该phase号下所有patch的对应子片段
+                for p in range(patch_num):
+                    this_patch = patches[p]  # [B, C, patch_len]
+                    if this_patch.shape[2] > ph: # ph means current phase
+                        # 本patch有这一相位
+                        sub_end = min(ph + self.subpatch_size, this_patch.shape[2])
+                        sub = this_patch[:, :, ph:sub_end]  # [B, C, phase_len_real]
+                        # 为保证后续展平方便，pad到subpatch_size
+                        '''
+                        zero padding, with masking:
+                        '''
+                        # if sub.shape[2] < subpatch_size:
+                        #     pad = torch.zeros(B, C, subpatch_size - sub.shape[2], device=sub.device, dtype=sub.dtype)
+                        #     # 如果不加 device 和 dtype，新建的张量默认是在 CPU 上，且数据类型为 torch.float32（浮点型）
+                        #     sub = torch.cat([sub, pad], dim=2)  # [B, C, subpatch_size]
+                        '''
+                        mean-value padding, therefore without masking mechanism:
+                        '''
+                        if sub.shape[2] <self.subpatch_size:
+                            mean_val = sub.mean(dim=2, keepdim=True)  # [B, C, 1]
+                            pad_repeat = self.subpatch_size - sub.shape[2]
+                            pad = mean_val.repeat(1, 1, pad_repeat)   # [B, C, pad_repeat]
+                            sub = torch.cat([sub, pad], dim=2)        # [B, C, subpatch_size]
+                        group.append(sub)
+                # group: list of [B, C, subpatch_size], 中间变量，储存当前相位的序列（包含所有patch）
+                '''
+                经典nn.MultiheadAttention()传入张量的格式为[B, T, C], 所以C需要MLP对最后一维(subpatchLength)进行映射, T则以patchNum * ChannelNum为准
+                可以直接把最后一维当成d_model(C)传入注意力函数，但是问题在于MLP可以增强数据的表现力/对于不同特征的“靠近”程度
+                '''
+                if group:
+                    group = torch.cat(group, dim=1)  # 按C和patch合并: [B, C*patch_num, subpatch_size]
+                    max_group_len = max(max_group_len, group.shape[1])
+                    group_contents.append(group)
+            # 现有 group_contents, 每个元素 [B, C*patch_num, subpatch_size]
+            # 注意不同group长度可能不同（因有的patch不足当前phase），attention时pad到max_group_len
+            output_groups = []
+            for group in group_contents:
+                cur_len = group.shape[1]
+                if cur_len < max_group_len:
+                    # 取已有片段的均值，按 batch 计算
+                    # group: [B, cur_len, subpatch_size]
+                    mean_val = group.mean(dim=1, keepdim=True)  # [B, 1, subpatch_size]
+                    group_pad_repeat = max_group_len - cur_len
+                    group_pad = mean_val.repeat(1, group_pad_repeat, 1)     # [B, pad_repeat, subpatch_size]
+                    group = torch.cat([group, group_pad], dim=1)      # [B, max_group_len, subpatch_size]
+                    # zero padding:
+                    # pad = torch.zeros(B, max_group_len - cur_len, subpatch_size, device=group.device, dtype=group.dtype)
+                    # group = torch.cat([group, pad], dim=1)  # [B, max_group_len, subpatch_size]
+                # pooling:
+                # group_pooled = group.mean(dim=2) # [B, max_group_len]
+                # group_pooled = group.mean(dim=2, keepdim=True)  # [B, max_group_len, 1]
+                group_embed = self.proj_in(group)
+                attn_out, attn_weights = self.attn(group_embed, group_embed, group_embed)
+                # optional: key_padding_mask in self.attn()
+                restored = self.proj_out(attn_out)
+                # restored: [B, max_group_len, subpatch_size]
+                output_groups.append(restored)
+                # output_groups: phase_num * [B, max_group_len, subpatch_size]
+            outs.append(output_groups)
+        # outs: k * phase_num * [B, max_group_len, subpatch_size]
+        result_list = []
+        for k, k_out in enumerate(outs):  # k_out: 当前分量的 phase 个 group
+        # 统计 patch 数
+            patch_num = k_out[0].shape[1] // C # max_group_len // C = patch_num
+            seq_pieces = []  # 这里收集按原始顺序拼好的片段
+            for patch_idx in range(patch_num):
+                # 逐patch取phase段
+                patch_pieces = []
+                for phase_idx, group in enumerate(k_out):
+                    # phase: current phase
+                    # group: [B, max_group_len, subpatch_size]
+                    group_reshaped = group.view(B, patch_num, C, self.subpatch_size).permute(0, 2, 1, 3)
+                    # [B, C, patch_num, subpatch_size] in current phase
+                    # 当前patch
+                    patch_piece = group_reshaped[:, :, patch_idx, :]   # [B, C, subpatch_size]
+                    patch_pieces.append(patch_piece)
+                # 按phase拼起来，恢复patch内部顺序
+                patch_seq = torch.cat(patch_pieces, dim=2)  # [B, C, patch_total_len]
+                seq_pieces.append(patch_seq)
+            # 最后把所有patch拼成全局序列
+            k_seq = torch.cat(seq_pieces, dim=2)  # [B, C, 总时序长度]
+            result_list.append(k_seq)
+        result_x = torch.stack(result_list, dim = -1)
+        return result_x
+        
 
-        # 恢复原始维度
-        output = output.permute(0, 1, 3, 2)
-        output = output.reshape(b, c, t, k)
-        return output
 
 # c-wise attention
 class CDimSelfAttention(nn.Module):
@@ -457,7 +584,7 @@ class PastDecomposableMixing(nn.Module):
         self.KDimSelfAttention = KDimSelfAttention()
 
         #t-wise attention
-        self.TDimSelfAttention = TDimSelfAttention()
+        self.TDimSelfAttention = TDimSelfAttention(configs, 12)
 
         # season frequency processing
         self.season_frequency_processing = SeasonFrequencyProcessor()
@@ -507,7 +634,7 @@ class PastDecomposableMixing(nn.Module):
             coeffs_list.append(coeffs)
 
         # Assume the last element is the approximation coefficients (trend)
-        time_trend_list = [coeffs[:, :, :, -1] for coeffs in coeffs_list]
+        time_trend_list = [coeffs[:, :, :, -1] for coeffs in coeffs_list] # trend doesn't contain K dim
         # Assume the rest are detail coefficients (season)
         time_season_list = [coeffs[:, :, :, :-1] for coeffs in coeffs_list]
         # for x in x_list:
@@ -519,13 +646,13 @@ class PastDecomposableMixing(nn.Module):
         # b, t, c, k
         time_images_list = []
         for time_image in time_trend_list:
-            time_image_m = self.TCNs(time_image)  # b, t, c
+            time_image_m = self.TCNs(time_image)  # b, t, c  easier to see trends; form a smoother series
             time_images_list.append(time_image_m)
         
 
         # c-wise attention
         time_image_cwa_list = []
-        for i, time_image in enumerate(time_images_list): 
+        for i, time_image in enumerate(time_images_list): # enumerate() contains a list for example, show a mapping relation.
             b, t, c_dim = time_image.size()  # 获取 c_dim b, t, c
             cdim_attention = CDimSelfAttention(c_dim).to(device)  
             time_image_cwa = cdim_attention(time_image).permute(0, 2, 1) # b ,c, t
@@ -535,7 +662,7 @@ class PastDecomposableMixing(nn.Module):
         time_image_twa_list = []
         for time_image in time_season_list:
             time_image = time_image.permute(0, 2, 1, 3) # b, c, t, k
-            time_image_twa = self.TDimSelfAttention(time_image) # b, c, t, k
+            time_image_twa = self.TDimSelfAttention(time_image, 48) # b, c, t, k
             time_image_twa_list.append(time_image_twa)
 
         time_image_kwa_list = []

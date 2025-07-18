@@ -1,3 +1,4 @@
 dataset/
 test_results/
 checkpoints/
+*.pyc
