@@ -1,9 +1,68 @@
+# new HopAttentionWithKScale
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl96_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.38478562235832214, mae:0.40558356046676636
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl192_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.4425482153892517, mae:0.4376823306083679
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl336_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.4764811098575592, mae:0.4547230005264282
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl720_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.4740954637527466, mae:0.47181236743927
+
+# KScaleIndependent
 long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl96_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
 mse:0.38308680057525635, mae:0.40445423126220703
 
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl192_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.4438236653804779, mae:0.43745163083076477
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl336_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.4778904914855957, mae:0.4551713466644287
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl720_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.4619408845901489, mae:0.4656943082809448
+
+# OriginalCode
 long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl96_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
-mse:0.38308680057525635, mae:0.40445423126220703
+mse:0.38972821831703186, mae:0.40105605125427246
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl192_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.4468187391757965, mae:0.4330082833766937
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl336_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.48467957973480225, mae:0.44971558451652527
+
+# HopMixer
+long_term_forecast_HopMixer_none_HopMixer_ETTh1_sl96_pl96_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_test_0  
+mse:0.3698873221874237, mae:0.3921374976634979
+
+long_term_forecast_HopMixer_none_HopMixer_ETTh1_sl96_pl192_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_test_0  
+mse:0.41484948992729187, mae:0.4201451241970062
+
+long_term_forecast_HopMixer_none_HopMixer_ETTh1_sl96_pl336_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_test_0  
+mse:0.45397764444351196, mae:0.4353621304035187
+
+long_term_forecast_HopMixer_none_HopMixer_ETTh1_sl96_pl720_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_test_0  
+mse:0.4612920880317688, mae:0.4550822973251343
+
+# K-scale Dependent TDimAttention without KDimAttention
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl336_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.48070669174194336, mae:0.45485925674438477
+
+# K-scale Independent + MixingKDimAttention
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl336_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.4855925142765045, mae:0.453587144613266
+
+# OldCode
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl336_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.4813290238380432, mae:0.45087844133377075
 
 long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl96_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
-mse:0.38308680057525635, mae:0.40445423126220703
+mse:0.3881685435771942, mae:0.40626436471939087
+
+long_term_forecast_test_none_TimeMixer_ETTh1_sl96_pl96_dm16_nh4_el2_dl1_df32_fc1_ebtimeF_dtTrue_exp_0  
+mse:0.38972821831703186, mae:0.40105605125427246
 

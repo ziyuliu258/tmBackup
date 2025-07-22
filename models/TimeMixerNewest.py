@@ -5,9 +5,8 @@ from layers.Autoformer_EncDec import series_decomp
 from layers.SelfAttention_Family import FullAttention
 from layers.Embed import DataEmbedding_wo_pos
 from layers.StandardNorm import Normalize
-from layers.SWTAttention_Family import WaveletEmbedding
-import numpy as np
-import matplotlib.pyplot as plt
+from layers.SWTAttention_Family import WaveletEmbedding   
+from torch.linalg import svd  # PyTorch 1.8+ 支持
 
 class DFT_series_decomp(nn.Module):
     """
@@ -28,6 +27,59 @@ class DFT_series_decomp(nn.Module):
         x_trend = x - x_season
         return x_season, x_trend
 
+
+class SVD_series_decomp(nn.Module): # Actually a kind of PCA?
+    """
+    基于奇异值分解（SVD）的时间序列分解模块
+    支持按时间维度展开或特征维度展开，返回趋势（低秩部分）和季节（残差）成分
+    """
+    def __init__(self, top_k=5, unfold_method='time'):
+        """
+        Args:
+            top_k: 保留的最大奇异值数量（决定低秩矩阵秩）
+            unfold_method: 矩阵展开方式，'time'（按时间展开）或'feature'（按特征展开）
+        """
+        super(SVD_series_decomp, self).__init__()
+        self.top_k = top_k
+        self.unfold_method = unfold_method
+        assert unfold_method in ['time', 'feature'], "unfold_method must be 'time' or 'feature'"
+
+    def forward(self, x):
+        """
+        Args:
+            x: 输入时间序列，形状为 [B, T, C]（B=批量, T=时间步, C=特征数）
+        Returns:
+            x_trend: 趋势成分（低秩重构），形状 [B, T, C]
+            x_season: 季节成分（残差），形状 [B, T, C]
+        """
+        B, T, C = x.shape
+        if self.unfold_method == 'time':
+            # 按时间展开：将每个时间点的特征向量作为矩阵行，形状变为 [B*T, C]
+            M = x.reshape(B*T, C)
+        else:
+            # 按特征展开：将每个特征的时间序列作为矩阵行，形状变为 [C, B*T]
+            M = x.permute(2, 0, 1).reshape(C, B*T)
+        
+        # 执行SVD分解
+        U, S, Vt = svd(M, full_matrices=False)  # 快速SVD，返回前min(m,n)个奇异值
+
+        # 保留前top_k个奇异值
+        S_k = S[:self.top_k]
+        U_k = U[:, :self.top_k]
+        Vt_k = Vt[:self.top_k, :]
+
+        # 重构低秩矩阵（趋势成分）
+        M_k = U_k @ torch.diag(S_k) @ Vt_k
+
+        # 恢复原始维度
+        if self.unfold_method == 'time':
+            x_trend = M_k.reshape(B, T, C)
+        else:
+            x_trend = M_k.reshape(C, B, T).permute(1, 2, 0)  # 转回 [B, T, C]
+        
+        # 计算季节成分（残差）
+        x_season = x - x_trend
+        return x_trend, x_season
 
 class SeasonFrequencyProcessor(nn.Module):
     def __init__(self, top_k=5):
@@ -122,7 +174,7 @@ class MultiScaleTrendMixing(nn.Module):
             ])
 
     def forward(self, trend_list):
-
+        
         # mixing low->high
         trend_list_reverse = trend_list.copy()
         trend_list_reverse.reverse()
@@ -228,52 +280,252 @@ class KDimSelfAttention(nn.Module):
         attn_scores = torch.einsum('bcti,bcsj->bcts', q, k) / (k_dim ** 0.5)
         attn_weights = self.softmax(attn_scores)
         output = torch.einsum('bcts,bcsj->bctj', attn_weights, v)
+        # outp = output.sum(dim = -1)
+        # return outp
         return output
-    
 
-#t-wise Attention
-class BlockSelfAttention(nn.Module):
-    def __init__(self, k_dim):
-        super(BlockSelfAttention, self).__init__()
-        self.query = nn.Linear(k_dim, k_dim)
-        self.key = nn.Linear(k_dim, k_dim)
-        self.value = nn.Linear(k_dim, k_dim)
-        self.softmax = nn.Softmax(dim=-1)
+# #t-wise Attention
+# class BlockSelfAttention(nn.Module):
+#     def __init__(self, k_dim):
+#         super(BlockSelfAttention, self).__init__()
+#         self.query = nn.Linear(k_dim, k_dim)
+#         self.key = nn.Linear(k_dim, k_dim)
+#         self.value = nn.Linear(k_dim, k_dim)
+#         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x):
-        # 生成查询、键和值
-        q = self.query(x)
-        k = self.key(x)
-        v = self.value(x)
+#     def forward(self, x):
+#         # 生成查询、键和值
+#         q = self.query(x) a
+#         k = self.key(x)
+#         v = self.value(x)
 
-        # 计算注意力分数
-        _, _, _, k_dim = x.size()
-        attn_scores = torch.einsum('bcti,bcsj->bcts', q, k) / (k_dim ** 0.5)
+#         # 计算注意力分数
+#         _, _, _, k_dim = x.size()
+#         attn_scores = torch.einsum('bcti,bcsj->bcts', q, k) / (k_dim ** 0.5)
 
-        # 应用 Softmax 函数得到注意力权重
-        attn_weights = self.softmax(attn_scores)
+#         # 应用 Softmax 函数得到注意力权重
+#         attn_weights = self.softmax(attn_scores)
 
-        # 计算加权和得到输出
-        output = torch.einsum('bcts,bcsj->bctj', attn_weights, v)
-        return output
+#         # 计算加权和得到输出
+#         output = torch.einsum('bcts,bcsj->bctj', attn_weights, v)
+#         return output
+
+# class TDimSelfAttention(nn.Module):
+#     def __init__(self):
+#         super(TDimSelfAttention, self).__init__()
+
+#     def forward(self, x):
+#         b, c, t, k = x.size()
+
+#         x = x.reshape(b, c, t // 12, k * 12)
+#         x = x.permute(0, 1, 3, 2)
+
+#         block_attn = BlockSelfAttention(t//12).to(x.device)
+#         output = block_attn(x)
+
+#         # 恢复原始维度
+#         output = output.permute(0, 1, 3, 2)
+#         output = output.reshape(b, c, t, k)
+#         return output
+
 
 class TDimSelfAttention(nn.Module):
-    def __init__(self):
-        super(TDimSelfAttention, self).__init__()
+    """
+    d_model: target number of MLP output layer's dim, from subpatch_len to d_model 
+    k_independent: if True, use K-independent attention; if False, use K-dependent attention
+    """
+    def __init__(self, configs, subpatch_size, num_heads=4, k_independent=True):
+        super().__init__()
+        self.d_model = configs.d_model
+        self.subpatch_size = subpatch_size
+        self.num_heads = num_heads
+        self.k_independent = k_independent
+        self.proj_in = nn.Linear(subpatch_size, configs.d_model)
+        self.attn = nn.MultiheadAttention(embed_dim=configs.d_model, num_heads=num_heads, batch_first=True)
+        self.proj_out = nn.Linear(configs.d_model, subpatch_size)
 
-    def forward(self, x):
-        b, c, t, k = x.size()
+    def forward(self, x, patch_size):
+        """
+        x: [B, C, T, K]
+        patch_size: int
+        subpatch_size: int
+        """
+        if self.k_independent:
+            return self._forward_k_independent(x, patch_size)
+        else:
+            return self._forward_k_dependent(x, patch_size)
+    
+    def _forward_k_independent(self, x, patch_size):
+        """K-scale Independent implementation"""
+        B, C, T, K = x.shape
+        outs = []
 
-        x = x.reshape(b, c, t // 12, k * 12)
-        x = x.permute(0, 1, 3, 2)
+        for k in range(K):
+            # 按patch切分，每个patch长度为patch_size，最后一段可能不足
+            patches = []
+            patch_lens = []
+            for start in range(0, T, patch_size):
+                end = min(start + patch_size, T)
+                patches.append(x[:, :, start:end, k])  # [B, C, patch_len]
+                patch_lens.append(end - start)
+            patch_num = len(patches)
+            
+            # 对每个patch再切subpatch
+            phase_groups = []
+            max_group_len = 0
+            group_contents = []  # group_contents[i]: 该phase号所有patch片段（list）
+            max_patch_len = max(patch_lens)
+            for ph in range(0, max_patch_len, self.subpatch_size):
+                group = []  # 该phase号下所有patch的对应子片段
+                for p in range(patch_num):
+                    this_patch = patches[p]  # [B, C, patch_len]
+                    if this_patch.shape[2] > ph: # ph means current phase
+                        # 本patch有这一相位
+                        sub_end = min(ph + self.subpatch_size, this_patch.shape[2])
+                        sub = this_patch[:, :, ph:sub_end]  # [B, C, phase_len_real]
+                        
+                        # mean-value padding
+                        if sub.shape[2] < self.subpatch_size:
+                            mean_val = sub.mean(dim=2, keepdim=True)  # [B, C, 1]
+                            pad_repeat = self.subpatch_size - sub.shape[2]
+                            pad = mean_val.repeat(1, 1, pad_repeat)   # [B, C, pad_repeat]
+                            sub = torch.cat([sub, pad], dim=2)        # [B, C, subpatch_size]
+                        group.append(sub)
+                
+                if group:
+                    group = torch.cat(group, dim=1)  # 按C和patch合并: [B, C*patch_num, subpatch_size]
+                    max_group_len = max(max_group_len, group.shape[1])
+                    group_contents.append(group)
+            
+            # 现有 group_contents, 每个元素 [B, ?(<=C*patch_num), subpatch_size]
+            output_groups = []
+            for group in group_contents:
+                cur_len = group.shape[1]
+                if cur_len < max_group_len:
+                    mean_val = group.mean(dim=1, keepdim=True)  # [B, 1, subpatch_size]
+                    group_pad_repeat = max_group_len - cur_len
+                    group_pad = mean_val.repeat(1, group_pad_repeat, 1)     # [B, pad_repeat, subpatch_size]
+                    group = torch.cat([group, group_pad], dim=1)      # [B, max_group_len, subpatch_size]
+                
+                group_embed = self.proj_in(group)
+                attn_out, attn_weights = self.attn(group_embed, group_embed, group_embed)
+                restored = self.proj_out(attn_out)
+                output_groups.append(restored)
+                
+            outs.append(output_groups)
+        
+        # 重构结果
+        result_list = []
+        for k, k_out in enumerate(outs):  # k_out: 当前分量的 phase 个 group
+            patch_num = k_out[0].shape[1] // C # max_group_len // C = patch_num
+            seq_pieces = []  # 这里收集按原始顺序拼好的片段
+            for patch_idx in range(patch_num):
+                # 逐patch取phase段
+                patch_pieces = []
+                for phase_idx, group in enumerate(k_out):
+                    # group: [B, max_group_len, subpatch_size]
+                    group_reshaped = group.view(B, patch_num, C, self.subpatch_size).permute(0, 2, 1, 3)
+                    # [B, C, patch_num, subpatch_size] in current phase
+                    patch_piece = group_reshaped[:, :, patch_idx, :]   # [B, C, subpatch_size]
+                    patch_pieces.append(patch_piece)
+                # 按phase拼起来，恢复patch内部顺序
+                patch_seq = torch.cat(patch_pieces, dim=2)  # [B, C, patch_total_len]
+                seq_pieces.append(patch_seq)
+            # 最后把所有patch拼成全局序列
+            k_seq = torch.cat(seq_pieces, dim=2)  # [B, C, 总时序长度]
+            result_list.append(k_seq)
+        result_x = torch.stack(result_list, dim=-1)
+        return result_x
+    
+    def _forward_k_dependent(self, x, patch_size):
+        """K-scale dependent implementation"""
+        B, C, T, K = x.shape
+        
+        # 对所有K维尺度同时进行patch切分
+        patches = []
+        patch_lens = []
+        for start in range(0, T, patch_size):
+            end = min(start + patch_size, T)
+            patches.append(x[:, :, start:end, :])  # [B, C, patch_len, K]
+            patch_lens.append(end - start)
+        patch_num = len(patches)
+        
+        # 对每个patch再切subpatch（相位）
+        max_group_len = 0
+        group_contents = []  # group_contents[i]: 该phase号所有patch片段（list）
+        max_patch_len = max(patch_lens)
+        
+        for ph in range(0, max_patch_len, self.subpatch_size):
+            group = []  # 该phase号下所有patch的对应子片段
+            for p in range(patch_num):
+                this_patch = patches[p]  # [B, C, patch_len, K]
+                if this_patch.shape[2] > ph:  # ph means current phase
+                    # 本patch有这一相位
+                    sub_end = min(ph + self.subpatch_size, this_patch.shape[2])
+                    sub = this_patch[:, :, ph:sub_end, :]  # [B, C, phase_len_real, K]
+                    
+                    # 为保证后续展平方便，pad到subpatch_size
+                    if sub.shape[2] < self.subpatch_size:
+                        mean_val = sub.mean(dim=2, keepdim=True)  # [B, C, 1, K]
+                        pad_repeat = self.subpatch_size - sub.shape[2]
+                        pad = mean_val.repeat(1, 1, pad_repeat, 1)   # [B, C, pad_repeat, K]
+                        sub = torch.cat([sub, pad], dim=2)        # [B, C, subpatch_size, K]
+                    
+                    group.append(sub)
+            
+            # group: list of [B, C, subpatch_size, K]
+            if group:
+                # 将所有patch堆叠: [B, C, subpatch_size, K, patch_num]
+                group_tensor = torch.stack(group, dim=-1)  # [B, C, subpatch_size, K, patch_num]
+                # 将C, K, patch_num三个维度完全展平成一维
+                group_flattened = group_tensor.permute(0, 1, 3, 4, 2).reshape(B, C*K*patch_num, self.subpatch_size)
+                # 现在: [B, C*K*patch_num, subpatch_size]
+                
+                max_group_len = max(max_group_len, group_flattened.shape[1])
+                group_contents.append(group_flattened)
+        
+        # 现有 group_contents, 每个元素 [B, C*K*patch_num, subpatch_size]
+        output_groups = []
+        for group in group_contents:
+            cur_len = group.shape[1]
+            if cur_len < max_group_len:
+                # 取已有片段的均值，按 batch 计算
+                mean_val = group.mean(dim=1, keepdim=True)  # [B, 1, subpatch_size]
+                group_pad_repeat = max_group_len - cur_len
+                group_pad = mean_val.repeat(1, group_pad_repeat, 1)     # [B, pad_repeat, subpatch_size]
+                group = torch.cat([group, group_pad], dim=1)      # [B, max_group_len, subpatch_size]
+            
+            # 应用注意力
+            group_embed = self.proj_in(group)
+            attn_out, attn_weights = self.attn(group_embed, group_embed, group_embed)
+            restored = self.proj_out(attn_out)
+            # restored: [B, max_group_len, subpatch_size]
+            output_groups.append(restored)
+        
+        # 重新组装回原始形状
+        result_patches = []
+        for patch_idx in range(patch_num):
+            # 逐patch取phase段
+            patch_pieces = []
+            for phase_idx, group in enumerate(output_groups):
+                # group: [B, max_group_len, subpatch_size]
+                # 需要重新reshape回 [B, C, K, patch_num, subpatch_size]
+                group_reshaped = group.view(B, C, K, patch_num, self.subpatch_size)
+                # 当前patch的当前phase
+                patch_piece = group_reshaped[:, :, :, patch_idx, :]   # [B, C, K, subpatch_size]
+                patch_pieces.append(patch_piece)
+            
+            # 按phase拼起来，恢复patch内部顺序
+            patch_seq = torch.cat(patch_pieces, dim=3)  # [B, C, K, patch_total_len]
+            result_patches.append(patch_seq)
+        
+        # 最后把所有patch拼成全局序列
+        result_x = torch.cat(result_patches, dim=3)  # [B, C, K, 总时序长度]
+        # 调整维度顺序回到原始格式
+        result_x = result_x.permute(0, 1, 3, 2)  # [B, C, T, K]
+        
+        return result_x
 
-        block_attn = BlockSelfAttention(t//12).to(x.device)
-        output = block_attn(x)
-
-        # 恢复原始维度
-        output = output.permute(0, 1, 3, 2)
-        output = output.reshape(b, c, t, k)
-        return output
 
 # c-wise attention
 class CDimSelfAttention(nn.Module):
@@ -286,7 +538,7 @@ class CDimSelfAttention(nn.Module):
 
     def forward(self, x):
         # 输入形状: (batch_size, k, t, c_dim)
-        b, k_dim, t, c_dim = x.size()
+        b, t, c_dim = x.size()
 
         # 生成查询、键和值
         q = self.query(x)  
@@ -294,11 +546,11 @@ class CDimSelfAttention(nn.Module):
         v = self.value(x)  
 
         # 计算注意力分数
-        attn_scores = torch.einsum('bkic,bkjc->bkij', q, k) / (c_dim ** 0.5)  
+        attn_scores = torch.einsum('bqd,bkd->bqk', q, k) / (c_dim ** 0.5)  
         attn_weights = self.softmax(attn_scores)  
 
         # 计算加权和得到输出
-        output = torch.einsum('bkij,bkjc->bkic', attn_weights, v)  
+        output = torch.einsum('bqk,bkd->bqd', attn_weights, v)  
 
         return output
 
@@ -399,16 +651,24 @@ class PastDecomposableMixing(nn.Module):
 
         #Multi-resolutional decomp
         self.multi_resolutional_decomp = MultiResolutionalDecomp(configs)
-        self.swt_decompose = WaveletEmbedding(d_channel=configs.d_model, swt=True, requires_grad=False, wv='db2', m=3, kernel_size=None)
-        self.swt_compose = WaveletEmbedding(d_channel=configs.d_model, swt=False, requires_grad=False, wv='db2', m=3, kernel_size=None)
+        self.swt_decompose = WaveletEmbedding(d_channel=configs.d_model, swt=True, requires_grad=False, wv='sym4', m=3, kernel_size=None)
+        self.swt_compose = WaveletEmbedding(d_channel=configs.d_model, swt=False, requires_grad=False, wv='sym4', m=3, kernel_size=None)
         #k-wise attention
         self.KDimSelfAttention = KDimSelfAttention()
 
         #t-wise attention
-        self.TDimSelfAttention = TDimSelfAttention()
+        self.TDimSelfAttention = TDimSelfAttention(configs, 12)
 
         # season frequency processing
         self.season_frequency_processing = SeasonFrequencyProcessor()
+        """
+        The SVD method has been deprecated !!!
+        """
+        # SVD c-wise
+        self.SVD_c = SVD_series_decomp(top_k=configs.top_k, unfold_method='feature')
+
+        # SVD t-wise
+        self.SVD_t = SVD_series_decomp(top_k=configs.top_k, unfold_method='time')
 
         # Mixing season
         self.mixing_multi_scale_season = MultiScaleSeasonMixing(configs)
@@ -438,54 +698,77 @@ class PastDecomposableMixing(nn.Module):
         device = x_list[0].device
 
         # multi-resolutional decomp
+        time_trend_list = []
+        time_season_list = []
         coeffs_list = []
         # Use swt_decompose instead of multi_resolutional_decomp
         for x in x_list:
             coeffs = self.swt_decompose(x)
             coeffs_list.append(coeffs)
-        
-        time_image_list = []
-        # b, t, c, k  multi-resolution_learning
-        for i, time_image in enumerate(coeffs_list):
-            time_image = time_image.permute(0, 2, 1, 3) # b, c, t, k
-            time_image = self.KDimSelfAttention(time_image)
-            time_image_list.append(time_image)
 
-        # for time_image in time_trend_list:
-        #     time_image_m = self.TCNs(time_image)  # b, t, c
-        #     time_images_list.append(time_image_m)
+        # Assume the last element is the approximation coefficients (trend)
+        time_trend_list = [coeffs[:, :, :, -1] for coeffs in coeffs_list] # trend doesn't contain K dim
+        # Assume the rest are detail coefficients (season)
+        time_season_list = [coeffs[:, :, :, :-1] for coeffs in coeffs_list]
+        # for x in x_list:
+        #     time_image_trend, time_image_season = self.multi_resolutional_decomp(x)
+        #     time_trend_list.append(time_image_trend)
+        #     time_season_list.append(time_image_season)# b, t, c, k
+        
+        # trend part
+        # b, t, c, k
+        time_images_list = []
+        for time_image in time_trend_list:
+            time_image_m = self.TCNs(time_image)  # b, t, c  easier to see trends; form a smoother series
+            time_images_list.append(time_image_m)
         
 
         # c-wise attention
         time_image_cwa_list = []
-        for i, time_image in enumerate(time_image_list): 
-            time_image = time_image.permute(0, 3, 1, 2) # b, k, t, c
-            b, k, t, c_dim = time_image.size()  # 获取 c_dim
-            cdim_attention = CDimSelfAttention(c_dim).to(device)  # 动态实例化 CDimSelfAttention
-            time_image_cwa = cdim_attention(time_image).permute(0, 3, 2, 1)
-            time_image_cwa_list.append(time_image_cwa) # b, t, c, k
+        for i, time_image in enumerate(time_images_list): # enumerate() contains a list for example, show a mapping relation.
+            b, t, c_dim = time_image.size()  # 获取 c_dim b, t, c
+            cdim_attention = CDimSelfAttention(c_dim).to(device)  
+            time_image_cwa = cdim_attention(time_image).permute(0, 2, 1) # b ,c, t
+            time_image_cwa_list.append(time_image_cwa)
 
+        # season part
         time_image_twa_list = []
-        for i, time_image in enumerate(time_image_list):
-            time_image_twa = self.TDimSelfAttention(time_image).permute(0, 2, 1, 3)# b, c, t ,k
+        for time_image in time_season_list: 
+        # for time_image in time_image_twa_list:
+            time_image = time_image.permute(0, 2, 1, 3) # b, c, t, k
+            time_image_twa = self.TDimSelfAttention(time_image, 48) # b, c, t, k
             time_image_twa_list.append(time_image_twa)
 
-        # for time_t, time_c in zip(time_image_twa_list, time_image_cwa_list):
-        #     time_t = self.decompsition(time_t)
-        #     time_c = self.decompsition(time_c)
+        time_image_kwa_list = []
+        for time_image in time_season_list:
+            time_image = time_image.permute(0, 2, 1, 3) # b, c, t, k
+            time_image_kwa = self.KDimSelfAttention(time_image) # b, c, t, k
+            time_image_kwa_list.append(time_image_kwa)
+
+        # unify the k dimension
+        out_timk_list = [torch.mean(out_timk, dim=-1) for out_timk in time_image_kwa_list]
+        out_timt_list = [torch.mean(out_timt, dim=-1) for out_timt in time_image_twa_list]
+        # When KDimAttention returns a sum of K-scale series, comment the above 2 lines
         
-        out_timc_list = [self.swt_compose(out_timc) for out_timc in time_image_cwa_list]
-        out_timt_list = [self.swt_compose(out_timt) for out_timt in time_image_twa_list]
-        
-        out_timc_list = [self.TCNs(out_timc).permute(0, 2, 1) for out_timc in out_timc_list]
-        out_timt_list = [self.TCNs(out_timt).permute(0, 2, 1) for out_timt in out_timt_list]
         # new multi-scale mixing
+        out_timk_list = self.mixing_multi_scale_trend(out_timk_list) # b, c, t -> b, t, c
         out_timt_list = self.mixing_multi_scale_trend(out_timt_list)
-        out_timc_list = self.mixing_multi_scale_trend(out_timc_list)
+        # When KDimAttention returns a sum of K-scale series, comment the above 2 lines
+        out_timc_list = self.mixing_multi_scale_trend(time_image_cwa_list)
+
+        out_season_list = []
+        for out_timk, out_timt, length in zip(out_timk_list, out_timt_list,
+                                                      length_list):
+            out = out_timk + out_timt
+            out_season_list.append(out[:, :length, :])
+        # When KDimAttention returns a sum of K-scale series, comment the above 4 lines
+
 
         out_list = []
-        for ori, out_season, out_trend, length in zip(x_list, out_timt_list, out_timc_list,
+        for ori, out_season, out_trend, length in zip(x_list, out_season_list, out_timc_list,
                                                       length_list):
+        # for ori, out_season, out_trend, length in zip(x_list, time_image_kwa_list, out_timc_list,
+        #                                               length_list):
             out = out_trend + out_season
             if self.channel_independence:
                 out = ori + self.out_cross_layer(out)
@@ -509,7 +792,7 @@ class Model(nn.Module):
 
         self.preprocess = series_decomp(configs.moving_avg)
         self.enc_in = configs.enc_in
-        self.use_future_temporal_feature = configs.use_future_temporal_feature
+        self.use_future_temporal_feature = configs.use_future_temporal_feature # mask
 
         if self.channel_independence == 1:
             self.enc_embedding = DataEmbedding_wo_pos(1, configs.d_model, configs.embed, configs.freq,
@@ -808,7 +1091,7 @@ class Model(nn.Module):
             enc_out = self.enc_embedding(x, None)  # [B,T,C]
             enc_out_list.append(enc_out)
 
-        # MultiScale-CrissCrossAttention  as encoder for past
+        # MultiScale-CrossAttention  as encoder for past
         for i in range(self.layer):
             enc_out_list = self.pdm_blocks[i](enc_out_list)
 
